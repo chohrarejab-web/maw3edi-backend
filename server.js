@@ -272,6 +272,18 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Mobile App Version & Maintenance Configuration
+app.get('/api/app-config', (req, res) => {
+  res.json({
+    success: true,
+    minVersion: process.env.MOBILE_MIN_VERSION || '1.0.0',
+    latestVersion: process.env.MOBILE_LATEST_VERSION || '1.0.0',
+    maintenanceMode: process.env.MAINTENANCE_MODE === 'true',
+    emergencyNumber: '190',
+    platform: 'Maw2idi Mobile API'
+  });
+});
+
 // Revenue Endpoint (Compatibility with test suite)
 app.get('/api/revenue', (req, res) => {
   res.json({

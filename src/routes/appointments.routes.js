@@ -437,7 +437,8 @@ router.post('/', optionalToken, (req, res) => {
         return res.status(409).json({
           success: false,
           conflict: true,
-          message: `Le créneau horaire ${time} (${date}) est déjà réservé par un autre patient. Veuillez choisir un autre créneau.`
+          message: `Le créneau horaire ${time} (${date}) est déjà réservé par un autre patient. Veuillez choisir un autre créneau.`,
+          messageAr: `الموعد ${time} (${date}) محجوز مسبقاً من طرف مريض آخر. يرجى اختيار موعد آخر.`
         });
       }
     }
@@ -840,7 +841,11 @@ router.post('/block', verifyToken, requireRole('DOCTOR', 'PRATICIEN', 'SECRETAIR
       if (existing.status === 'BLOCKED') {
         return res.status(200).json({ success: true, message: 'Ce créneau est déjà bloqué.', data: existing });
       }
-      return res.status(409).json({ success: false, message: `Le créneau ${cleanTime} (${date}) est déjà réservé par un patient (${existing.patientName}).` });
+      return res.status(409).json({
+        success: false,
+        message: `Le créneau ${cleanTime} (${date}) est déjà réservé par un patient (${existing.patientName}).`,
+        messageAr: `الموعد ${cleanTime} (${date}) محجوز مسبقاً من طرف مريض (${existing.patientName}).`
+      });
     }
 
     const blockedApt = {

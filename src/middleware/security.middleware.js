@@ -331,7 +331,12 @@ function verifyAuditLedgerIntegrity() {
 // 5. ANTI-CSRF (CROSS-SITE REQUEST FORGERY)
 // ==========================================
 function csrfProtection(req, res, next) {
-  const clientId = (req.headers['cf-connecting-ip'] || req.socket?.remoteAddress || 'client').replace(/^.*:/, '');
+  const clientId = (
+    req.headers['cf-connecting-ip'] ||
+    req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
+    req.socket?.remoteAddress ||
+    'client'
+  ).replace(/^.*:/, '');
   
   // Issue fresh CSRF token header on every request for client SPA/frontend
   const token = generateCsrfToken(clientId);

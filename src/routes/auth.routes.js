@@ -41,7 +41,12 @@ const verifiedResetTokens = new Map();
 
 // GET /api/auth/csrf-token - Obtain fresh anti-CSRF token
 router.get('/csrf-token', (req, res) => {
-  const clientId = (req.headers['cf-connecting-ip'] || req.socket?.remoteAddress || 'client').replace(/^.*:/, '');
+  const clientId = (
+    req.headers['cf-connecting-ip'] ||
+    req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
+    req.socket?.remoteAddress ||
+    'client'
+  ).replace(/^.*:/, '');
   const token = generateCsrfToken(clientId);
   res.json({
     success: true,

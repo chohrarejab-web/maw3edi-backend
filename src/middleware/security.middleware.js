@@ -521,7 +521,7 @@ const corsOptions = {
       /^https:\/\/[a-z0-9-]+\.netlify\.app$/,
       /^capacitor:\/\/localhost$/,
       /^ionic:\/\/localhost$/,
-      /^https?:\/\/localhost$/
+      /^https?:\/\/localhost(:\d+)?$/
     ];
 
     const devRegexes = [

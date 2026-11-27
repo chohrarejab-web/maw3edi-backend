@@ -518,6 +518,8 @@ const corsOptions = {
       /^https:\/\/[a-z0-9-]+\.sahatn\.tn$/,
       /^https:\/\/maw2idi\.tn$/,
       /^https:\/\/[a-z0-9-]+\.maw2idi\.tn$/,
+      /^https:\/\/(www\.)?maw3edi\.com$/,
+      /^https:\/\/[a-z0-9-]+\.maw3edi\.com$/,
       /^https:\/\/[a-z0-9-]+\.netlify\.app$/,
       /^capacitor:\/\/localhost$/,
       /^ionic:\/\/localhost$/,

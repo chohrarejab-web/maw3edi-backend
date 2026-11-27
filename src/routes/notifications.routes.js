@@ -177,9 +177,26 @@ router.get('/', verifyToken, (req, res) => {
       });
     }
 
-    const unreadCount = list.filter(n => !n.read).length;
+    const unreadCount = list.reduce((acc, n) => acc + (n.read ? 0 : 1), 0);
 
-    const enrichedList = list.map(n => {
+    // Cap returned notifications to prevent O(N) serialization/formatting spikes under 1000+ concurrent users
+    const requestedLimit = parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? Math.min(requestedLimit, 500) : 100;
+    const slicedList = list.slice(0, limit);
+
+    // Hoist date comparisons & fast formatting outside loop (avoids 4x Intl.DateTimeFormat per item)
+    const FR_SHORT_MONTHS = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
+    const now = new Date();
+    const nowY = now.getFullYear();
+    const nowM = now.getMonth();
+    const nowD = now.getDate();
+    const yesterday = new Date(nowY, nowM, nowD - 1);
+    const yY = yesterday.getFullYear();
+    const yM = yesterday.getMonth();
+    const yD = yesterday.getDate();
+    const pad2 = (v) => (v < 10 ? '0' + v : String(v));
+
+    const enrichedList = slicedList.map(n => {
       let ms = n.timeMs;
       if (!ms && n.id) {
         const m = n.id.match(/notif-(\d+)/);
@@ -194,37 +211,30 @@ router.get('/', verifyToken, (req, res) => {
       const d = new Date(ms);
       if (isNaN(d.getTime())) return n;
 
-      const now = new Date();
-      const isToday = d.getFullYear() === now.getFullYear() &&
-                      d.getMonth() === now.getMonth() &&
-                      d.getDate() === now.getDate();
+      const dY = d.getFullYear();
+      const dM = d.getMonth();
+      const dD = d.getDate();
+      const hh = pad2(d.getHours());
+      const mm = pad2(d.getMinutes());
+      const ss = pad2(d.getSeconds());
+      const timeStr = `${hh}:${mm}`;
+      const timeWithSec = `${hh}:${mm}:${ss}`;
+      const fullDateStr = `${pad2(dD)}/${pad2(dM + 1)}/${dY}`;
 
-      const yesterday = new Date(now);
-      yesterday.setDate(now.getDate() - 1);
-      const isYesterday = d.getFullYear() === yesterday.getFullYear() &&
-                          d.getMonth() === yesterday.getMonth() &&
-                          d.getDate() === yesterday.getDate();
-
-      const timeStr = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-      const timeWithSec = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      const fullDateStr = d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
-
-      let computedTimestamp = '';
-      if (isToday) {
-        computedTimestamp = "Aujourd'hui " + timeStr;
-      } else if (isYesterday) {
-        computedTimestamp = "Hier " + timeStr;
+      let computedTimestamp;
+      if (dY === nowY && dM === nowM && dD === nowD) {
+        computedTimestamp = `Aujourd'hui ${timeStr}`;
+      } else if (dY === yY && dM === yM && dD === yD) {
+        computedTimestamp = `Hier ${timeStr}`;
       } else {
-        const day = String(d.getDate()).padStart(2, '0');
-        const month = d.toLocaleDateString('fr-FR', { month: 'short' });
-        computedTimestamp = day + ' ' + month + ' ' + timeStr;
+        computedTimestamp = `${pad2(dD)} ${FR_SHORT_MONTHS[dM]} ${timeStr}`;
       }
 
       return {
         ...n,
         timeMs: ms,
         exactTime: timeStr,
-        fullTimestamp: fullDateStr + ' à ' + timeWithSec,
+        fullTimestamp: `${fullDateStr} à ${timeWithSec}`,
         timestamp: computedTimestamp
       };
     });
@@ -232,6 +242,7 @@ router.get('/', verifyToken, (req, res) => {
     res.json({
       success: true,
       count: enrichedList.length,
+      totalCount: list.length,
       unreadCount,
       data: enrichedList,
       notifications: enrichedList
@@ -273,11 +284,14 @@ router.patch('/:id/read', verifyToken, (req, res) => {
     if (target) {
       target.read = read;
       db.save();
+      db.syncToPostgres('notifications', 'update', target);
 
       const io = req.app.get('io');
       if (io) {
-        io.emit('notif:update', { action: 'read', id, read });
-        io.emit('notif:sync', { action: 'read', id, read });
+        const payload = { action: 'read', id, read };
+        if (target.doctorId) io.to(`doctor:${target.doctorId}`).emit('notif:update', payload);
+        else if (target.patientId || target.userId) io.to(`patient:${target.patientId || target.userId}`).emit('notif:update', payload);
+        else io.to('admin').emit('notif:update', payload);
       }
       return res.json({ success: true, message: read ? 'Notification marquée comme lue.' : 'Notification marquée comme non lue.' });
     }
@@ -299,6 +313,7 @@ router.post(['/mark-all-read', '/mark-all-unread'], verifyToken, (req, res) => {
 
     const activeDocName = (doctorName || '').toLowerCase().replace(/^(dr\.?|docteur)\s*/i, '').trim();
 
+    const updatedIds = [];
     list.forEach(n => {
       const spaceMatch = !space || space === 'all' || n.space === 'all' || n.space === 'public' || n.space === space;
       if (!spaceMatch) return;
@@ -321,14 +336,25 @@ router.post(['/mark-all-read', '/mark-all-unread'], verifyToken, (req, res) => {
         if (n.userId && n.userId !== patientId) return;
       }
 
-      n.read = read;
+      if (n.read !== read) {
+        n.read = read;
+        if (n.id) updatedIds.push(n.id);
+      }
     });
     db.save();
 
+    // Single batch SQL update instead of N queries
+    if (updatedIds.length > 0 && db.isPostgresConnected && db.isPostgresConnected()) {
+      db.query('UPDATE notifications SET read = $1 WHERE id = ANY($2::text[]);', [read, updatedIds])
+        .catch(err => console.warn('[PostgreSQL Batch Sync] notifications markAllRead:', err.message));
+    }
+
     const io = req.app.get('io');
     if (io) {
-      io.emit('notif:update', { action: read ? 'markAllRead' : 'markAllUnread', space: space || 'all', doctorId, patientId, read });
-      io.emit('notif:sync', { action: read ? 'markAllRead' : 'markAllUnread', space: space || 'all', doctorId, patientId, read });
+      const payload = { action: read ? 'markAllRead' : 'markAllUnread', space: space || 'all', doctorId, patientId, read };
+      if (space === 'doctor' && doctorId) io.to(`doctor:${doctorId}`).emit('notif:update', payload);
+      else if (space === 'patient' && patientId) io.to(`patient:${patientId}`).emit('notif:update', payload);
+      else io.to('admin').emit('notif:update', payload);
     }
 
     res.json({ success: true, message: read ? 'Toutes les notifications ont été marquées comme lues.' : 'Toutes les notifications ont été marquées comme non lues.' });

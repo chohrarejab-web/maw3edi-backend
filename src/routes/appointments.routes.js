@@ -811,6 +811,59 @@ router.get('/available-slots/:doctorId', (req, res) => {
   }
 });
 
+// GET /api/appointments/available-slots-batch/:doctorId?dates=YYYY-MM-DD,...
+// Single-pass batch endpoint (eliminates N+1 per-day HTTP fan-out under high concurrency)
+router.get('/available-slots-batch/:doctorId', (req, res) => {
+  try {
+    const doctorId = req.params.doctorId || 'doc-1';
+    const schedule = db.getDoctorSchedule(doctorId);
+    const rawDates = String(req.query.dates || '')
+      .split(',')
+      .map(d => d.trim())
+      .filter(Boolean)
+      .slice(0, 14);
+
+    if (rawDates.length === 0) {
+      rawDates.push(normalizeAppointmentDate(new Date()));
+    }
+
+    const normalizedDates = rawDates.map(d => normalizeAppointmentDate(d));
+    const dateSet = new Set(normalizedDates);
+
+    // Single O(N) pass over appointments grouped by dateIso
+    const byDate = new Map();
+    const allAppointments = db.get('appointments') || [];
+    for (let i = 0; i < allAppointments.length; i++) {
+      const a = allAppointments[i];
+      if (!a || a.status === 'CANCELLED') continue;
+      const isSameDoc = (a.doctorId === doctorId || (doctorId === 'doc-1' && (!a.doctorId || a.doctorId === 'doc-1')));
+      if (!isSameDoc) continue;
+      const aIso = a.dateIso || normalizeAppointmentDate(a.date);
+      if (!dateSet.has(aIso)) continue;
+      let bucket = byDate.get(aIso);
+      if (!bucket) {
+        bucket = [];
+        byDate.set(aIso, bucket);
+      }
+      bucket.push(a);
+    }
+
+    const days = {};
+    for (const iso of normalizedDates) {
+      days[iso] = calculateAvailableSlots(schedule, byDate.get(iso) || [], iso);
+    }
+
+    res.json({
+      success: true,
+      doctorId,
+      schedule,
+      days
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // POST /api/appointments/block - Block a slot for emergency or doctor unavailability (Staff only)
 router.post('/block', verifyToken, requireRole('DOCTOR', 'PRATICIEN', 'SECRETAIRE', 'SECRETARY', 'ADMIN', 'SUPER_ADMIN'), (req, res) => {
   try {

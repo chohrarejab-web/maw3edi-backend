@@ -1064,13 +1064,19 @@ class Database {
     this.data[collection] = items;
     this.save();
     if (collection === 'doctorSchedules' && items && typeof items === 'object' && postgres.isPostgresConnected()) {
-      for (const [docId, sched] of Object.entries(items)) {
+      const entries = Object.entries(items);
+      if (entries.length > 0) {
+        const nowIso = new Date().toISOString();
+        const docIds = entries.map(([docId]) => docId);
+        const schedulesJson = entries.map(([, sched]) => JSON.stringify(sched));
+        const updatedAts = entries.map(([, sched]) => sched?.updatedAt || nowIso);
+        // Single batched UNNEST upsert instead of N separate queries
         postgres.query(
           `INSERT INTO doctor_schedules (doctor_id, schedule, updated_at)
-           VALUES ($1, $2, $3)
+           SELECT * FROM UNNEST($1::text[], $2::jsonb[], $3::timestamptz[])
            ON CONFLICT (doctor_id) DO UPDATE SET schedule = EXCLUDED.schedule, updated_at = EXCLUDED.updated_at;`,
-          [docId, JSON.stringify(sched), new Date().toISOString()]
-        ).catch(err => console.warn('[PostgreSQL Sync Error] doctorSchedules:', err.message));
+          [docIds, schedulesJson, updatedAts]
+        ).catch(err => console.warn('[PostgreSQL Sync Error] doctorSchedules batch:', err.message));
       }
     }
   }
@@ -1160,6 +1166,14 @@ class Database {
     };
     this.data.doctorSchedules[doctorId] = updated;
     this.save();
+    if (postgres.isPostgresConnected()) {
+      postgres.query(
+        `INSERT INTO doctor_schedules (doctor_id, schedule, updated_at)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (doctor_id) DO UPDATE SET schedule = EXCLUDED.schedule, updated_at = EXCLUDED.updated_at;`,
+        [doctorId, JSON.stringify(updated), updated.updatedAt]
+      ).catch(err => console.warn('[PostgreSQL Sync Error] saveDoctorSchedule:', err.message));
+    }
     return updated;
   }
 }

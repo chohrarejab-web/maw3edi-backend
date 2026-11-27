@@ -70,10 +70,24 @@ function broadcastNotification(io, {
   }
 
   // Trigger background Firebase Cloud Messaging (FCM) push to logged-in mobile devices
-  pushService.sendPushForNotification(newNotif).catch(() => {});
+  pushService.sendPushForNotification(newNotif).catch((err) => {
+    console.warn('[FCM] sendPushForNotification error:', err?.message || err);
+  });
 
   return newNotif;
 }
+
+// GET /api/notifications/push-status - Diagnostic check for FCM readiness & registered devices
+router.get('/push-status', verifyToken, async (req, res) => {
+  try {
+    const userId = req.user?.uuid || req.user?.id || null;
+    const doctorId = req.user?.doctorId || req.query?.doctorId || null;
+    const status = await pushService.getPushStatus({ userId, doctorId });
+    return res.json({ success: true, ...status });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
 
 // POST /api/notifications/register-device - Register phone FCM token for logged-in user/doctor
 router.post('/register-device', verifyToken, async (req, res) => {

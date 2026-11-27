@@ -7,7 +7,6 @@
 const postgres = require('../config/postgres');
 const db = require('../config/database');
 
-let admin = null;
 let messaging = null;
 let lastInitError = null;
 
@@ -21,7 +20,9 @@ function initFirebaseAdmin() {
   }
 
   try {
-    admin = require('firebase-admin');
+    const { initializeApp, getApps, getApp, cert } = require('firebase-admin/app');
+    const { getMessaging } = require('firebase-admin/messaging');
+
     let serviceAccount;
     let trimmed = rawCred.trim();
     // Strip accidental outer quotes from env var UI
@@ -43,12 +44,11 @@ function initFirebaseAdmin() {
       serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
     }
 
-    if (!admin.apps.length) {
-      admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount)
-      });
-    }
-    messaging = admin.messaging();
+    const app = getApps().length
+      ? getApp()
+      : initializeApp({ credential: cert(serviceAccount) });
+
+    messaging = getMessaging(app);
     lastInitError = null;
     console.log('✅ [FCM] Firebase Admin Messaging initialized.');
   } catch (err) {

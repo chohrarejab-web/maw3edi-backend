@@ -1,6 +1,7 @@
 const express = require('express');
 const db = require('../config/database');
 const { verifyToken, requireRole } = require('../middleware/auth');
+const pushService = require('../services/push.service');
 
 const router = express.Router();
 
@@ -52,7 +53,7 @@ function broadcastNotification(io, {
   db.save();
 
   if (io) {
-    // Targeted room emission strictly per actor/space
+    // Targeted room emission strictly per actor/space (avoids 1000-user broadcast storms)
     if (space === 'doctor' && doctorId) {
       io.to(`doctor:${doctorId}`).to(`cabinet:${doctorId}`).to('admin').emit('notif:new', newNotif);
       io.to(`doctor:${doctorId}`).to(`cabinet:${doctorId}`).to('admin').emit('notif:broadcast', newNotif);
@@ -64,22 +65,47 @@ function broadcastNotification(io, {
       io.to(`doctor:${doctorId}`).to(`secretaire:${doctorId}`).to('admin').emit('notif:new', newNotif);
       io.to(`doctor:${doctorId}`).to(`secretaire:${doctorId}`).to('admin').emit('notif:broadcast', newNotif);
     } else {
-      io.emit('notif:new', newNotif);
-      io.emit('notif:broadcast', newNotif);
+      io.to('admin').emit('notif:new', newNotif);
     }
-    // Sync event informing clients to refresh their specific filtered view
-    io.emit('notif:sync', {
-      id: newNotif.id,
-      space,
-      doctorId,
-      doctorName,
-      patientId,
-      userId,
-      timeMs: newNotif.timeMs
-    });
   }
+
+  // Trigger background Firebase Cloud Messaging (FCM) push to logged-in mobile devices
+  pushService.sendPushForNotification(newNotif).catch(() => {});
+
   return newNotif;
 }
+
+// POST /api/notifications/register-device - Register phone FCM token for logged-in user/doctor
+router.post('/register-device', verifyToken, async (req, res) => {
+  try {
+    const fcmToken = String(req.body?.fcmToken || '').trim();
+    if (!fcmToken || fcmToken.length < 20) {
+      return res.status(400).json({ success: false, message: 'Jeton FCM invalide.' });
+    }
+    const userId = req.user?.uuid || req.user?.id;
+    const role = (req.user?.role || 'PATIENT').toUpperCase();
+    const doctorId = req.user?.doctorId || req.body?.doctorId || null;
+    const lang = req.body?.lang === 'ar' ? 'ar' : 'fr';
+    const platform = String(req.body?.platform || 'android').slice(0, 32);
+
+    await pushService.registerDeviceToken({ fcmToken, userId, role, doctorId, lang, platform });
+    return res.json({ success: true, message: 'Appareil enregistré pour les notifications push.' });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// DELETE /api/notifications/register-device - Unregister phone FCM token on logout
+router.delete('/register-device', verifyToken, async (req, res) => {
+  try {
+    const fcmToken = req.body?.fcmToken ? String(req.body.fcmToken).trim() : null;
+    const userId = req.user?.uuid || req.user?.id;
+    await pushService.unregisterDeviceToken({ fcmToken, userId });
+    return res.json({ success: true, message: 'Notifications push désactivées sur cet appareil.' });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message });
+  }
+});
 
 // GET /api/notifications - Fetch synchronized notifications (Requires authentication)
 router.get('/', verifyToken, (req, res) => {

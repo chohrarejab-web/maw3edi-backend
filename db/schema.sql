@@ -256,6 +256,19 @@ CREATE TABLE IF NOT EXISTS referral_letters (
     created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Mobile Push Notification Device Tokens (Firebase Cloud Messaging)
+CREATE TABLE IF NOT EXISTS device_tokens (
+    fcm_token TEXT PRIMARY KEY,
+    user_id VARCHAR(64) NOT NULL,
+    role VARCHAR(32) DEFAULT 'PATIENT',
+    doctor_id VARCHAR(64),
+    lang VARCHAR(8) DEFAULT 'fr',
+    platform VARCHAR(32) DEFAULT 'android',
+    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_device_tokens_user ON device_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_device_tokens_doctor ON device_tokens(doctor_id);
+
 -- Idempotent column upgrades for existing tables (safe to re-run)
 ALTER TABLE doctors ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE;
 ALTER TABLE doctors ADD COLUMN IF NOT EXISTS account_finalized BOOLEAN DEFAULT TRUE;
